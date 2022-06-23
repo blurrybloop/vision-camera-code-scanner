@@ -36,6 +36,8 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.io.ByteArrayOutputStream;
+import android.util.Base64;
 
 public class VisionCameraCodeScannerPlugin extends FrameProcessorPlugin {
   private BarcodeScanner barcodeScanner = null;
@@ -68,15 +70,21 @@ public class VisionCameraCodeScannerPlugin extends FrameProcessorPlugin {
     if (mediaImage != null) {
       ArrayList<Task<List<Barcode>>> tasks = new ArrayList<Task<List<Barcode>>>();
       InputImage image = InputImage.fromMediaImage(mediaImage, frame.getImageInfo().getRotationDegrees());
+      Bitmap bitmap = null;
+
+      try {
+        bitmap = ImageConvertUtils.getInstance().getUpRightBitmap(image);
+      } catch (Exception e) {
+        e.printStackTrace();
+        return null;
+      }
 
       if (params[1] instanceof ReadableNativeMap) {
         ReadableNativeMap scannerOptions = (ReadableNativeMap) params[1];
         boolean checkInverted = scannerOptions.getBoolean("checkInverted");
 
         if (checkInverted) {
-          Bitmap bitmap = null;
           try {
-            bitmap = ImageConvertUtils.getInstance().getUpRightBitmap(image);
             Bitmap invertedBitmap = this.invert(bitmap);
             InputImage invertedImage = InputImage.fromBitmap(invertedBitmap, 0);
             tasks.add(barcodeScanner.process(invertedImage));
@@ -96,9 +104,17 @@ public class VisionCameraCodeScannerPlugin extends FrameProcessorPlugin {
         }
 
         WritableNativeArray array = new WritableNativeArray();
-        for (Barcode barcode : barcodes) {
-          array.pushMap(convertBarcode(barcode));
+        if (!barcodes.isEmpty()) {
+          ByteArrayOutputStream baos = new ByteArrayOutputStream();
+          bitmap.compress(Bitmap.CompressFormat.JPEG, 90, baos);
+          byte[] b = baos.toByteArray();
+          String base64 = Base64.encodeToString(b, Base64.NO_WRAP);
+
+          for (Barcode barcode : barcodes) {
+            array.pushMap(convertBarcode(barcode, base64));
+          }
         }
+
         return array;
       } catch (Exception e) {
         e.printStackTrace();
@@ -188,7 +204,7 @@ public class VisionCameraCodeScannerPlugin extends FrameProcessorPlugin {
     return map;
   }
 
-  private WritableNativeMap convertBarcode(@NonNull Barcode barcode) {
+  private WritableNativeMap convertBarcode(@NonNull Barcode barcode, @NonNull String base64) {
     WritableNativeMap map = new WritableNativeMap();
 
     Rect boundingBox = barcode.getBoundingBox();
@@ -213,23 +229,24 @@ public class VisionCameraCodeScannerPlugin extends FrameProcessorPlugin {
 
     map.putMap("content", convertContent(barcode));
     map.putInt("format", barcode.getFormat());
+    map.putString("base64", base64);
 
     return map;
   }
 
   // Bitmap Inversion https://gist.github.com/moneytoo/87e3772c821cb1e86415
   private Bitmap invert(Bitmap src)
-	{ 
+	{
 		int height = src.getHeight();
-		int width = src.getWidth();    
+		int width = src.getWidth();
 
 		Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
 		Canvas canvas = new Canvas(bitmap);
 		Paint paint = new Paint();
-		
+
 		ColorMatrix matrixGrayscale = new ColorMatrix();
 		matrixGrayscale.setSaturation(0);
-		
+
 		ColorMatrix matrixInvert = new ColorMatrix();
 		matrixInvert.set(new float[]
 		{
@@ -239,10 +256,10 @@ public class VisionCameraCodeScannerPlugin extends FrameProcessorPlugin {
 			0.0f, 0.0f, 0.0f, 1.0f, 0.0f
 		});
 		matrixInvert.preConcat(matrixGrayscale);
-		
+
 		ColorMatrixColorFilter filter = new ColorMatrixColorFilter(matrixInvert);
 		paint.setColorFilter(filter);
-		
+
 		canvas.drawBitmap(src, 0, 0, paint);
 		return bitmap;
 	}

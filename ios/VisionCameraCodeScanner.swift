@@ -3,22 +3,36 @@ import MLKitVision
 
 @objc(VisionCameraCodeScanner)
 class VisionCameraCodeScanner: NSObject, FrameProcessorPluginBase {
-    
+
     static var barcodeScanner: BarcodeScanner?
     static var barcodeFormatOptionSet: BarcodeFormat = []
-    
+    private static let context = CIContext(options: nil)
+
     @objc
     public static func callback(_ frame: Frame!, withArgs args: [Any]!) -> Any! {
         let image = VisionImage(buffer: frame.buffer)
         image.orientation = .up
-        
+
+        guard let imageBuffer = CMSampleBufferGetImageBuffer(frame.buffer) else {
+          print("Failed to get CVPixelBuffer!")
+          return nil
+        }
+        let ciImage = CIImage(cvPixelBuffer: imageBuffer)
+
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+          print("Failed to create CGImage!")
+          return nil
+        }
+
+        let originalImage = UIImage(cgImage: cgImage)
+
         var barCodeAttributes: [Any] = []
-        
+
         do {
             try self.createScanner(args)
             var barcodes: [Barcode] = []
             barcodes.append(contentsOf: try barcodeScanner!.results(in: image))
-            
+
             if let options = args[1] as? [String: Any] {
                 let checkInverted = options["checkInverted"] as? Bool ?? false
                 if (checkInverted) {
@@ -32,20 +46,21 @@ class VisionCameraCodeScanner: NSObject, FrameProcessorPluginBase {
                     barcodes.append(contentsOf: try barcodeScanner!.results(in: VisionImage.init(image: invertedImage)))
                 }
             }
-            
+
             if (!barcodes.isEmpty){
+                let base64 = originalImage.jpegData(compressionQuality: 90)!.base64EncodedString()
                 for barcode in barcodes {
-                    barCodeAttributes.append(self.convertBarcode(barcode: barcode))
+                    barCodeAttributes.append(self.convertBarcode(barcode: barcode, base64: base64))
                 }
             }
-            
+
         } catch _ {
             return nil
         }
-        
+
         return barCodeAttributes
     }
-    
+
     static func createScanner(_ args: [Any]!) throws {
         guard let rawFormats = args[0] as? [Int] else {
             throw BarcodeError.noBarcodeFormatProvided
@@ -65,12 +80,12 @@ class VisionCameraCodeScanner: NSObject, FrameProcessorPluginBase {
             barcodeFormatOptionSet = formatOptionSet
         }
     }
-    
+
     static func convertContent(barcode: Barcode) -> Any {
         var map: [String: Any] = [:]
-        
+
         map["type"] = barcode.valueType
-        
+
         switch barcode.valueType {
         case .unknown, .ISBN, .text:
             map["data"] = barcode.rawValue
@@ -95,22 +110,23 @@ class VisionCameraCodeScanner: NSObject, FrameProcessorPluginBase {
         default:
             map = [:]
         }
-        
+
         return map
     }
-    
-    static func convertBarcode(barcode: Barcode) -> Any {
+
+    static func convertBarcode(barcode: Barcode, base64: String) -> Any {
         var map: [String: Any] = [:]
-        
+
         map["cornerPoints"] = BarcodeConverter.convertToArray(points: barcode.cornerPoints as? [CGPoint])
         map["displayValue"] = barcode.displayValue
         map["rawValue"] = barcode.rawValue
         map["content"] = self.convertContent(barcode: barcode)
         map["format"] = barcode.format.rawValue
-        
+        map["base64"] = base64
+
         return map
     }
-    
+
     // CIImage Inversion Filter https://stackoverflow.com/a/42987565
     static func invert(src: CIImage) -> UIImage? {
         guard let filter = CIFilter(name: "CIColorInvert") else { return nil }
